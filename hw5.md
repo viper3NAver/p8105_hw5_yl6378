@@ -50,3 +50,195 @@ dplyr::filter(birthday_results, group_size %in% c(23, 50))
 The estimated probability that at least two people share a birthday
 increases with group size. It reaches 50.7% with just 23 people and
 rises to 97.1% with 50 people.
+
+## Problem 2
+
+``` r
+library(tidyverse)
+```
+
+    ## ── Attaching core tidyverse packages ──────────────────────── tidyverse 2.0.0 ──
+    ## ✔ dplyr     1.2.1     ✔ readr     2.2.0
+    ## ✔ forcats   1.0.1     ✔ stringr   1.6.0
+    ## ✔ lubridate 1.9.5     ✔ tibble    3.3.1
+    ## ✔ purrr     1.2.2     ✔ tidyr     1.3.2
+    ## ── Conflicts ────────────────────────────────────────── tidyverse_conflicts() ──
+    ## ✖ dplyr::filter() masks stats::filter()
+    ## ✖ dplyr::lag()    masks stats::lag()
+    ## ℹ Use the conflicted package (<http://conflicted.r-lib.org/>) to force all conflicts to become errors
+
+``` r
+subject_files <- tibble(
+  file_path = list.files(
+    "data",
+    pattern = "^(con|exp)_[0-9]+\\.csv$",
+    full.names = TRUE,
+    recursive = TRUE
+  )
+)
+
+if (nrow(subject_files) != 20) {
+  stop("Expected 20 participant CSVs in the data folder next to the Rmd.")
+}
+
+subject_files <- subject_files |>
+  mutate(
+    weekly_data = purrr::map(file_path, read_csv, show_col_types = FALSE)
+  )
+
+study_data <- subject_files |>
+  mutate(
+    file_name = basename(file_path),
+    arm = if_else(str_starts(file_name, "con_"), "Control", "Experimental"),
+    subject_id = str_extract(file_name, "[0-9]+")
+  ) |>
+  select(subject_id, arm, weekly_data) |>
+  unnest(weekly_data) |>
+  pivot_longer(
+    cols = -c(subject_id, arm),
+    names_to = "week",
+    names_transform = list(week = readr::parse_number),
+    values_to = "observation"
+  )
+
+head(study_data)
+```
+
+    ## # A tibble: 6 × 4
+    ##   subject_id arm      week observation
+    ##   <chr>      <chr>   <dbl>       <dbl>
+    ## 1 01         Control     1        0.2 
+    ## 2 01         Control     2       -1.31
+    ## 3 01         Control     3        0.66
+    ## 4 01         Control     4        1.96
+    ## 5 01         Control     5        0.23
+    ## 6 01         Control     6        1.09
+
+``` r
+ggplot(study_data, aes(x = week, y = observation, group = subject_id)) +
+  geom_line(alpha = 0.7) +
+  facet_wrap(~ arm) +
+  scale_x_continuous(breaks = sort(unique(study_data$week))) +
+  labs(
+    title = "Weekly observations by study arm",
+    x = "Week",
+    y = "Observation"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+![](hw5_files/figure-gfm/unnamed-chunk-5-1.png)<!-- -->
+
+Observations in the control arm fluctuated from week to week with no
+clear overall trend. In the experimental arm, observations generally
+increased over time, and the difference between the two groups was most
+apparent in weeks 7 and 8.
+
+## Problem3
+
+``` r
+library(tidyverse)
+
+set.seed(123)
+
+simulate_t_test <- function(true_mu) {
+  sample_data <- rnorm(n = 30, mean = true_mu, sd = 5)
+
+  t.test(sample_data, mu = 0, alternative = "two.sided") |>
+    broom::tidy() |>
+    select(estimate, p.value)
+}
+
+simulation_results <- expand_grid(
+  true_mu = 0:6,
+  iteration = seq_len(5000)
+) |>
+  mutate(
+    test_result = purrr::map(true_mu, simulate_t_test)
+  ) |>
+  unnest(test_result) |>
+  mutate(rejected = p.value < 0.05)
+
+simulation_summary <- simulation_results |>
+  group_by(true_mu) |>
+  summarize(
+    rejection_rate = mean(rejected),
+    mean_all = mean(estimate),
+    mean_rejected = mean(estimate[rejected]),
+    .groups = "drop"
+  )
+
+simulation_summary
+```
+
+    ## # A tibble: 7 × 4
+    ##   true_mu rejection_rate mean_all mean_rejected
+    ##     <int>          <dbl>    <dbl>         <dbl>
+    ## 1       0         0.0446  0.00900         0.147
+    ## 2       1         0.191   1.01            2.23 
+    ## 3       2         0.556   1.99            2.60 
+    ## 4       3         0.890   3.01            3.20 
+    ## 5       4         0.987   3.98            4.01 
+    ## 6       5         0.999   4.98            4.99 
+    ## 7       6         1       5.99            5.99
+
+``` r
+ggplot(simulation_summary, aes(x = true_mu, y = rejection_rate)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = 0:6) +
+  scale_y_continuous(labels = scales::label_percent()) +
+  labs(
+    title = "Rejection rate of the one-sample t-test",
+    x = "True mean",
+    y = "Proportion of tests rejecting the null"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+![](hw5_files/figure-gfm/unnamed-chunk-7-1.png)<!-- -->
+
+``` r
+estimate_plot_data <- simulation_summary |>
+  select(true_mu, mean_all, mean_rejected) |>
+  pivot_longer(
+    cols = c(mean_all, mean_rejected),
+    names_to = "sample_set",
+    values_to = "average_estimate"
+  ) |>
+  mutate(
+    sample_set = recode(
+      sample_set,
+      mean_all = "All samples",
+      mean_rejected = "Samples rejecting the null"
+    )
+  )
+
+ggplot(
+  estimate_plot_data,
+  aes(x = true_mu, y = average_estimate, color = sample_set)
+) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = 0:6) +
+  labs(
+    title = "Average estimated mean by true mean",
+    x = "True mean",
+    y = "Average estimated mean",
+    color = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "bottom")
+```
+
+![](hw5_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
+
+Across all samples, the average estimated mean is close to the true
+mean. In samples where the null hypothesis is rejected, for small
+positive effects, the average estimate tends to be higher than the true
+mean because samples with unusually large estimates are more likely to
+reach significance. As statistical power approaches 100%, this
+difference narrows. When the true mean is zero, two-sided tests select
+extreme estimates in both directions, so their average remains close to
+zero.
